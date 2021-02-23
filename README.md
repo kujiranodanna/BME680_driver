@@ -1,4 +1,4 @@
-# This repository is now deprecated and no longer maintained. Kindly refer to the new repository for the BME680 and BME688 snesors.
+# This repository is now deprecated and no longer maintained. Kindly refer to the new repository for the BME680 and BME688 sensors.
 https://github.com/BoschSensortec/BME68x-Sensor-API
 
 # BME680 sensor API
