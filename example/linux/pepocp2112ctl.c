@@ -1,6 +1,6 @@
 /*
 The MIT License
-Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2021.3.28
+Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2021.4.11
 read for AM2320 or BME680 temperature,humidity,presure,gas
 */
 
@@ -20,6 +20,8 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
  *   or
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
  *
+ o 2021.4.11
+   bug fix BME680 and AM2320 cannot be operated at the same time
  o 2021.3.28 Ver0.2
  o Added support for some bug fixes and BME680
  o Existing bug
@@ -53,7 +55,7 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
 #undef  DEMO /* Comment out the case when DEMO */
 #define READ 'R'
 #define WRITE 'W'
-#define VER "0.2"
+#define VER "0.3"
 #define DAY "compiled:"__DATE__
 #define LOCK -1
 #define UNLOCK 1
@@ -75,7 +77,10 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
 #define CP2112_TRANSFER_STATUS_REQ 0x15
 #define CP2112_TRANSFER_STATUS_RESP 0x16
 #define CP2112_TRANSFER_CANCEL 0x17
-
+#define CP2112_VID 0x10c4
+#define CP2112_PID 0xea90
+#define CP2112_IS_OPEN 0x01
+#define CP2112_IS_CLOSE 0x00
 #define DELAY 3000  /* for measurement delay ms */
 #define LOOP_TIME 5000  /* senser read period ms */
 #define HID_WAIT 5  /* for hid delay ms */
@@ -93,6 +98,7 @@ FILE *data_fd;
 uint16_t meas_period;
 int mysem_id = 0;
 hid_device *hd;
+int8_t is_hid = CP2112_IS_CLOSE;
 
 void user_delay_ms(uint32_t period)
 {
@@ -286,8 +292,11 @@ sigtype close_fd()
   unlink(SENSOR_DATA);
   unlink(SENSOR_DATA_TMP);
   unlink(CP2112_SEMAPHORE);
-  hid_close(hd);
-  hid_exit();
+  if (is_hid == CP2112_IS_OPEN)
+  {
+    hid_close(hd);
+    hid_exit();
+  }
   exit(EXIT_SUCCESS);
 }
 
@@ -315,6 +324,66 @@ unsigned short crc16( unsigned char *ptr, unsigned char len ) {
     }
   }
   return crc;
+}
+
+/* configures cp2112 to automatically send read data, see AN495 section 4.6 */
+static int cp2112_set_auto_send_read(hid_device *hd, int on_off)
+{
+  unsigned char buf[14] = { CP2112_GETSET_SMBUS_CONFIG, };
+  int ret = hid_get_feature_report(hd, buf, sizeof(buf));
+  if (ret < 0)
+  {
+    fprintf(stderr, "hid_get_feature_report() failed: %ls\n",
+    hid_error(hd));
+    return -1;
+  }
+  buf[6] = on_off;
+  ret = hid_send_feature_report(hd, buf, sizeof(buf));
+  if (ret < 0)
+  {
+    fprintf(stderr, "hid_send_feature_report() failed: %ls\n",
+    hid_error(hd));
+    return -1;
+  }
+  return 0;
+}
+
+static int cp2112_close(hid_device *hd)
+{
+  int8_t rslt = 0;
+  hid_close(hd);
+  hid_exit();
+  is_hid = CP2112_IS_CLOSE;
+  return rslt;
+}
+
+static int cp2112_open(int cp2112_vid, int cp2112_pid)
+{
+/* open Silabs CP2112 USB reference design by USB product:vendor id */
+//  hid_device *hd = hid_open(0x10c4, 0xea90, NULL);
+ int8_t rslt = 0;
+ if (is_hid == CP2112_IS_CLOSE)
+  {
+    if (hid_init() < 0)
+    {
+      fprintf(stderr, "hid_init() failed, exit.\n");
+      raise(SIGTERM);
+    }
+    hd = hid_open(cp2112_vid, cp2112_pid, NULL);
+    if (hd == NULL)
+    {
+      fprintf(stderr, "hid_open() failed\n");
+      raise(SIGTERM);
+    }
+  }
+  if (cp2112_set_auto_send_read(hd, 0) < 0)
+  {
+    fprintf(stderr, "set_auto_send_read failed\n");
+    is_hid = CP2112_IS_CLOSE;
+    raise(SIGTERM);
+  }
+  is_hid = CP2112_IS_OPEN;
+  return rslt;
 }
 
 /* reset cp2112 */
@@ -421,27 +490,6 @@ unsigned char gpio_read(hid_device *hd)
   return ret;
 }
 
-/* configures cp2112 to automatically send read data, see AN495 section 4.6 */
-static int cp2112_set_auto_send_read(hid_device *hd, int on_off)
-{
-  unsigned char buf[14] = { CP2112_GETSET_SMBUS_CONFIG, };
-  int ret = hid_get_feature_report(hd, buf, sizeof(buf));
-  if (ret < 0)
-  {
-    fprintf(stderr, "hid_get_feature_report() failed: %ls\n",
-    hid_error(hd));
-  return -1;
-  }
-  buf[6] = on_off;
-  ret = hid_send_feature_report(hd, buf, sizeof(buf));
-  if (ret < 0)
-  {
-    fprintf(stderr, "hid_send_feature_report() failed: %ls\n",
-    hid_error(hd));
-    return -1;
-  }
-  return 0;
-}
 /* see if the cp2112 is idle */
 static int cp2112_is_idle(hid_device *hd)
 {
@@ -660,8 +708,6 @@ int bme680_is_idle(hid_device *hd)
     fprintf(stderr, "bme680_is_idle()retry failed:%d %ls\n", retry_cnt,
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
-    return -1;
   }
   return ret;
 }
@@ -680,7 +726,6 @@ int bme680_is_connect(hid_device *hd)
     fprintf(stderr, "bme680_is_connect() failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   mysem_lock(mysem_id);
   rslt = hid_write(hd, buf_out, 2);
@@ -691,7 +736,6 @@ int bme680_is_connect(hid_device *hd)
     fprintf(stderr, "bme680_is_connect() failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   if (rslt != 2)
   {
@@ -709,6 +753,8 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
   uint8_t buf_in[40] = { 0 };
   int timeout = 500; // 500 milisecons
   mysem_lock(mysem_id);
+/* if cp2112_hid open ? */
+  if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
 //  fprintf(stderr,"\ndev_id: %02x reg_addr: %02x reg_data: %x len: %d\n",dev_id,reg_addr,sizeof(reg_data),len);
   ret = bme680_is_idle(hd);
   if (ret < 0)
@@ -716,7 +762,6 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
     fprintf(stderr, "user_i2c_read()0 failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   reg[0] = CP2112_DATA_WRITE;
   reg[1] = BME680_I2C_ADDR_PRIMARY<<1;
@@ -728,7 +773,6 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
     fprintf(stderr, "user_i2c_read()1 failed: %ls\n" ,
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   user_delay_ms(HID_WAIT);
   reg[0] = CP2112_DATA_READ_REQ;
@@ -741,7 +785,6 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
     fprintf(stderr, "user_i2c_read()2 failed: %ls\n" ,
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   user_delay_ms(HID_WAIT);
   while (retry_cnt < 3)
@@ -756,7 +799,6 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
       fprintf(stderr, "user_i2c_read()3 failed: %ls\n" ,
       hid_error(hd));
       raise(SIGTERM);
-      exit(EXIT_FAILURE);
     }
     user_delay_ms(HID_WAIT);
     memset(buf_in, 0x00, sizeof(buf_in));
@@ -808,26 +850,23 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
     user_delay_ms(HID_WAIT);
     continue;
   }
-  mysem_unlock(mysem_id);
   if (retry_cnt > 3)
   {
     fprintf(stderr, "user_i2c_read()4 retry failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   if (ret == 3)
   {
     fprintf(stderr, "user_i2c_read()5 failed time out: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
+
   }
   if (buf_in[2] != len)
   {
     fprintf(stderr, "user_i2c_read()6 failed read length not match\n");
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   if(buf_in[2] > 0 && rslt > 3 && buf_in[2] < rslt)
   {
@@ -839,17 +878,18 @@ int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16
 //      fprintf(stderr,"%d:%02x ",i,reg_data[i]);
     }
 //    fprintf(stderr, "\nbuf_in[2] end\n");
-    return 0;
   }
 /* Read as a dummy to make the status response idle */
   ret = bme680_is_idle(hd);
+  cp2112_close(hd);
+  mysem_unlock(mysem_id);
   if (ret < 0)
   {
     fprintf(stderr, "user_i2c_read()10 failed: %ls\n",
     hid_error(hd));
     return 1;
   }
-  return 1;
+  return 0;
 }
 
 int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint16_t len)
@@ -858,13 +898,14 @@ int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint1
   int8_t rslt = 0; /* Return 0 for Success, non-zero for failure */
   uint8_t reg[30] = { 0 };
   mysem_lock(mysem_id);
+/* if cp2112_hid open ? */
+  if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
   ret = bme680_is_idle(hd);
   if (ret < 0)
   {
     fprintf(stderr, "user_i2c_write() failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
   reg[0] = CP2112_DATA_WRITE;
   reg[1] = BME680_I2C_ADDR_PRIMARY<<1;
@@ -879,7 +920,6 @@ int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint1
     fprintf(stderr, "user_i2c_write() failed: %ls\n",
     hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
 /* // debugging code in
   fprintf(stderr, "user_i2c_write()1 rslt: %d len: %d\n" ,rslt,len);
@@ -890,6 +930,7 @@ int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data, uint1
     }
   fprintf(stderr, "\nreg dump end\n");
 */  // debugging code out
+  cp2112_close(hd);
   mysem_unlock(mysem_id);
   if (rslt != len+4)
   {
@@ -948,7 +989,6 @@ int bme680_measured(hid_device *hd)
   {
     fprintf(stderr, "bme680_measured()0 failed: %ls\n" ,hid_error(hd));
     raise(SIGTERM);
-    exit(EXIT_FAILURE);
   }
 /* Get sensor data Avoid using measurements from an unstable heating setup */
   conf_bme680(hd);
@@ -961,7 +1001,7 @@ int bme680_measured(hid_device *hd)
       if(data_fd < 0)
       {
         raise(SIGTERM);
-        exit(EXIT_FAILURE);
+
       }
       t = time(NULL);
       tm = *localtime(&t);
@@ -1054,25 +1094,8 @@ int main(int argc, char *argv[])
     exit(EXIT_FAILURE);
   }
   mysem_lock(mysem_id);
-  if (hid_init() < 0)
-  {
-    fprintf(stderr, "hid_init() failed, exit.\n");
-    exit(EXIT_FAILURE);
-  }
-  /* open Silabs CP2112 USB reference design by USB product:vendor id */
-//  hid_device *hd = hid_open(0x10c4, 0xea90, NULL);
-  hd = hid_open(0x10c4, 0xea90, NULL);
-  if (hd == NULL)
-  {
-    fprintf(stderr, "hid_open() failed\n");
-    unlink(CP2112_SEMAPHORE);
-    exit(EXIT_FAILURE);
-  }
-  if (cp2112_set_auto_send_read(hd, 0) < 0)
-  {
-    fprintf(stderr, "set_auto_send_read failed\n");
-    exit(EXIT_FAILURE);
-  }
+/* if cp2112_hid open ? */
+  if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
 // DEMO
 #ifdef DEMO
   unsigned char mask = 0x7f;
@@ -1130,7 +1153,8 @@ int main(int argc, char *argv[])
     else if (port == 9)
     {
   /* cp2112 reset */
-      cp2112_reset(hd)  ;
+      cp2112_reset(hd);
+      cp2112_close(hd);
       mysem_unlock(mysem_id);
       unlink(CP2112_SEMAPHORE);
       exit(EXIT_SUCCESS);
@@ -1160,7 +1184,6 @@ int main(int argc, char *argv[])
   user_delay_ms(DEBUG_WAIT);
   mysem_unlock(mysem_id);
 #endif
-  hid_close(hd);
-  hid_exit();
+  cp2112_close(hd);
   exit(EXIT_SUCCESS);
 }
