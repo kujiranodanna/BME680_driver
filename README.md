@@ -1,3 +1,12 @@
+BME680 operation verified with cp2112 https://kujiranodanna.github.io/tags/cp2112andBME680/
+
+![CP2112_BME680_debuf](https://kujiranodanna.github.io/images/cp2112_debug.jpg)
+![Linux program example on this site](https://github.com/kujiranodanna/BME680_driver/tree/master/example/linux)
+
+![raspberry pi program example on this site](https://github.com/kujiranodanna/BME680_driver/tree/master/example/raspberry_pi)
+
+2021.4.13 Added the above program example by kujiranodanna
+
 # This repository is now deprecated and no longer maintained. Kindly refer to the new repository for the BME680 and BME688 sensors.
 https://github.com/BoschSensortec/BME68x-Sensor-API
 
