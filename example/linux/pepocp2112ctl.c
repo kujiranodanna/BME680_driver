@@ -1,6 +1,6 @@
 /*
 The MIT License
-Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2021.4.11
+Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2021.4.21
 read for AM2320 or BME680 temperature,humidity,presure,gas
 */
 
@@ -20,6 +20,8 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
  *   or
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
  *
+ o 2021.4.21
+   bug fix gpio output pin is reset when the command is executed
  o 2021.4.11
    bug fix BME680 and AM2320 cannot be operated at the same time
  o 2021.3.28 Ver0.2
@@ -55,7 +57,7 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
 #undef  DEMO /* Comment out the case when DEMO */
 #define READ 'R'
 #define WRITE 'W'
-#define VER "0.3"
+#define VER "0.4"
 #define DAY "compiled:"__DATE__
 #define LOCK -1
 #define UNLOCK 1
@@ -291,7 +293,6 @@ sigtype close_fd()
   mysem_unlock(mysem_id);
   unlink(SENSOR_DATA);
   unlink(SENSOR_DATA_TMP);
-  unlink(CP2112_SEMAPHORE);
   if (is_hid == CP2112_IS_OPEN)
   {
     hid_close(hd);
@@ -351,8 +352,11 @@ static int cp2112_set_auto_send_read(hid_device *hd, int on_off)
 static int cp2112_close(hid_device *hd)
 {
   int8_t rslt = 0;
-  hid_close(hd);
-  hid_exit();
+  if (is_hid == CP2112_IS_OPEN)
+  {
+    hid_close(hd);
+    hid_exit();
+  }
   is_hid = CP2112_IS_CLOSE;
   return rslt;
 }
@@ -375,12 +379,6 @@ static int cp2112_open(int cp2112_vid, int cp2112_pid)
       fprintf(stderr, "hid_open() failed\n");
       raise(SIGTERM);
     }
-  }
-  if (cp2112_set_auto_send_read(hd, 0) < 0)
-  {
-    fprintf(stderr, "set_auto_send_read failed\n");
-    is_hid = CP2112_IS_CLOSE;
-    raise(SIGTERM);
   }
   is_hid = CP2112_IS_OPEN;
   return rslt;
@@ -579,6 +577,7 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       user_delay_ms(HID_WAIT);
       continue;
     }
+    user_delay_ms(HID_WAIT);
 /* write a buf_out byte to the am2320 */
     buf_out[0] = CP2112_DATA_WRITE;
     buf_out[2] = 0x03; // writes length
@@ -1075,6 +1074,23 @@ int main(int argc, char *argv[])
   if (fdsem == NULL)
   {
     create_semaphore();
+    cp2112_open(CP2112_VID, CP2112_PID);
+    cp2112_config_gpio(hd);
+  // DEMO
+  #ifdef DEMO
+    unsigned char mask = 0x7f;
+    unsigned char value = 0x7f;
+  #else
+    unsigned char mask = 0x0f;
+    unsigned char value = 0x00;
+  #endif
+    cp2112_set_gpio(hd, mask, value);
+    if (cp2112_set_auto_send_read(hd, 0) < 0)
+    {
+      fprintf(stderr, "set_auto_send_read failed\n");
+      is_hid = CP2112_IS_CLOSE;
+      raise(SIGTERM);
+    }
   }
   else
     fclose(fdsem);
@@ -1096,17 +1112,6 @@ int main(int argc, char *argv[])
   mysem_lock(mysem_id);
 /* if cp2112_hid open ? */
   if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
-// DEMO
-#ifdef DEMO
-  unsigned char mask = 0x7f;
-  unsigned char value = 0x7f;
-#else
-  unsigned char mask = 0x0f;
-  unsigned char value = 0x00;
-#endif
-  cp2112_config_gpio(hd);
-  cp2112_set_gpio(hd, mask, value);
-/* cp2112 auto_send_read disable */
   if (rw_flag == WRITE)
   {
   /* port write */
