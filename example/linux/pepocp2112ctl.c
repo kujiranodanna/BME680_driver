@@ -12,7 +12,7 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
  * https://www.silabs.com/documents/public/data-sheets/cp2112-datasheet.pdf
  *
  * Depends on the HID API multi-platform library, available from
- * http://www.signal11.us/oss/hidapi/
+ * https://github.com/signal11/hidapi
  * BME680 Drivers from https://github.com/BoschSensortec/BME680_driver
  * Downloads bme680.c bme680.h bme680_defs.h
  * Build with
@@ -20,9 +20,9 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
  *   or
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
  *
- o 2021.4.23
+ o 2021.4.23 Ver0.4
    bug fix gpio output pin is reset when the command is executed
- o 2021.4.11
+ o 2021.4.11 Ver0.3
    bug fix BME680 and AM2320 cannot be operated at the same time
  o 2021.3.28 Ver0.2
  o Added support for some bug fixes and BME680
