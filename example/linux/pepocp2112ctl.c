@@ -1,7 +1,6 @@
 /*
 The MIT License
-Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2021.4.23
-read for AM2320 or BME680 temperature,humidity,presure,gas
+Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.1.17
 */
 
 /*
@@ -20,6 +19,8 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
  *   or
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
  *
+ o 2022.1.17 Ver0.5
+   bug fix mysem_lock,mysem_unlock
  o 2021.4.23 Ver0.4
    bug fix gpio output pin is reset when the command is executed
  o 2021.4.11 Ver0.3
@@ -57,7 +58,7 @@ read for AM2320 or BME680 temperature,humidity,presure,gas
 #undef  DEMO /* Comment out the case when DEMO */
 #define READ 'R'
 #define WRITE 'W'
-#define VER "0.4"
+#define VER "0.5"
 #define DAY "compiled:"__DATE__
 #define LOCK -1
 #define UNLOCK 1
@@ -99,6 +100,7 @@ struct bme680_field_data data;
 FILE *data_fd;
 uint16_t meas_period;
 int mysem_id = 0;
+key_t key;
 hid_device *hd;
 int8_t is_hid = CP2112_IS_CLOSE;
 
@@ -120,6 +122,7 @@ void usage()
   fprintf(stderr,"\n\rusage:pepocp2112ctl port:0-3 output, 4-7 input ");
   fprintf(stderr,"\n\rusage:pepocp2112ctl 5  <--AM2320 measured");
   fprintf(stderr,"\n\rusage:pepocp2112ctl 10  <--BME680 measured\n\r");
+  exit(EXIT_FAILURE);
 }
 
 int get_myval(int sid)
@@ -180,7 +183,6 @@ void create_semaphore()
   FILE *fdsem;
   uint16_t d_result;
   int mysemun_id;
-  key_t key;
 #ifdef DEBUG
   pid_t my_pid, sem_pid;
   my_pid = getpid();
@@ -384,31 +386,16 @@ static int cp2112_set_auto_send_read(hid_device *hd, int on_off)
 
 void mysem_lock(int sid)
 {
-  key_t key;
+//  key_t key;
   FILE *fdsem;
+  int config_gpio = 0;
   if (sid == 0)
   {
     fdsem = fopen(CP2112_SEMAPHORE,"r");
     if (fdsem == NULL)
     {
       create_semaphore();
-      cp2112_open(CP2112_VID, CP2112_PID);
-      cp2112_config_gpio(hd);
-    // DEMO
-    #ifdef DEMO
-      unsigned char mask = 0x7f;
-      unsigned char value = 0x7f;
-    #else
-      unsigned char mask = 0x0f;
-      unsigned char value = 0x00;
-    #endif
-      cp2112_set_gpio(hd, mask, value);
-      if (cp2112_set_auto_send_read(hd, 0) < 0)
-      {
-        fprintf(stderr, "set_auto_send_read failed\n");
-        is_hid = CP2112_IS_CLOSE;
-        raise(SIGTERM);
-      }
+      config_gpio = 1;
     }
     else
       fclose(fdsem);
@@ -429,7 +416,6 @@ void mysem_lock(int sid)
     }
     sid = mysem_id;
   }
-  if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
   struct sembuf mysemop[1];
   mysemop[0].sem_num = 0;
   mysemop[0].sem_op = LOCK;
@@ -442,6 +428,26 @@ void mysem_lock(int sid)
 #ifdef DEBUG
   printf("semop_lock:");get_myval(sid);
 #endif
+  if (is_hid == CP2112_IS_CLOSE) cp2112_open(CP2112_VID, CP2112_PID);
+  if (config_gpio == 1)
+  {
+    cp2112_config_gpio(hd);
+    // DEMO
+    #ifdef DEMO
+    unsigned char mask = 0x7f;
+    unsigned char value = 0x7f;
+    #else
+    unsigned char mask = 0x0f;
+    unsigned char value = 0x00;
+    #endif
+    cp2112_set_gpio(hd, mask, value);
+    if (cp2112_set_auto_send_read(hd, 0) < 0)
+    {
+      fprintf(stderr, "set_auto_send_read failed\n");
+      is_hid = CP2112_IS_CLOSE;
+      raise(SIGTERM);
+    }
+  }
 }
 
 void mysem_unlock(int sid)
@@ -604,42 +610,53 @@ int am2320_measured(hid_device *hd)
 /* These three steps can be completed by the sensor and writes reads
 https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/cp2112_returns_incor-Dbhn
 */
+  mysem_unlock(mysem_id);
   while (retry_cnt < 5)
   {
+    mysem_lock(mysem_id);
     ret = cp2112_is_idle(hd);
+    mysem_unlock(mysem_id);
  // ret: 0x01 is Busy
     if (ret == 1)
     {
       retry_cnt++;
+      mysem_unlock(mysem_id);
       user_delay_ms(HID_WAIT);
       continue;
     }
 // am2320 wake up
     ret = hid_write(hd, buf_out, 2);
+    mysem_unlock(mysem_id);
 // ret: 0x02 is Complete
     if (ret != 2)
     {
       retry_cnt++;
+      mysem_unlock(mysem_id);
       user_delay_ms(HID_WAIT);
       continue;
     }
-    user_delay_ms(HID_WAIT);
+    mysem_unlock(mysem_id);
 /* write a buf_out byte to the am2320 */
     buf_out[0] = CP2112_DATA_WRITE;
     buf_out[2] = 0x03; // writes length
     buf_out[3] = 0x03; // measured am2320 specification 1
     buf_out[4] = 0x00; // specification 2
     buf_out[5] = 0x04; // specification 3
+    user_delay_ms(timeout);
+    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 6);
+    mysem_unlock(mysem_id);
     if (ret != 6)
     {
       retry_cnt++;
       continue;
     }
+    mysem_unlock(mysem_id);
     user_delay_ms (HID_WAIT);
     buf_out[0] = CP2112_DATA_READ_REQ;
     buf_out[2] = 0x00; // reads length_high
     buf_out[3] = 8; // reads length_low
+    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 4);
     if (ret < 0)
     {
@@ -647,10 +664,12 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       hid_error(hd));
      return -1;
     }
+    mysem_unlock(mysem_id);
     user_delay_ms (HID_WAIT);
     buf_out[0] = CP2112_DATA_READ_FORCE_SEND;
     buf_out[2] = 0x00; // reads length_high
     buf_out[3] = 8; // reads length_low
+    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 4);
     if (ret < 0)
     {
@@ -658,8 +677,11 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       hid_error(hd));
       return -1;
     }
+    mysem_unlock(mysem_id);
     user_delay_ms(HID_WAIT);
+    mysem_lock(mysem_id);
     ret = hid_read_timeout(hd, buf_in, 11, timeout);
+    mysem_unlock(mysem_id);
 /*
     fprintf(stderr, "\nret: %d retry_cnt: %d\n",ret,retry_cnt);
     fprintf(stderr, "\nbuf_in dump start\n");
@@ -680,8 +702,10 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       break;
   }
 /* Dummy reading */
+  mysem_lock(mysem_id);
   ret = cp2112_is_idle(hd);
-  if ( retry_cnt > 5 )
+  mysem_unlock(mysem_id);
+  if ( retry_cnt > 4 )
   {
     fprintf(stderr, "-1");
     return -1;
@@ -1072,14 +1096,12 @@ int main(int argc, char *argv[])
   if ( argc > 4 || argc < 2  )
   {
     usage();
-    exit(EXIT_FAILURE);
   }
   else {
     port = atoi(argv[1]);
     if (port > 10 || port < 0)
     {
       usage();
-      exit(EXIT_FAILURE);
     }
   }
   if ( argc == 3 ||  argc == 4)
@@ -1088,7 +1110,6 @@ int main(int argc, char *argv[])
     if ( data != 0 && data != 1 )
     {
       usage();
-      exit(EXIT_FAILURE);
     }
     else {
       rw_flag = WRITE;
@@ -1100,7 +1121,6 @@ int main(int argc, char *argv[])
     if ( port_timer < 0 || port_timer > 300000 )
     {
       usage();
-      exit(EXIT_FAILURE);
     }
     rw_flag = WRITE;
   }
