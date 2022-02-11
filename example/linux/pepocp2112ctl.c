@@ -1,6 +1,6 @@
 /*
 The MIT License
-Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.1.17
+Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.2.10
 */
 
 /*
@@ -19,7 +19,7 @@ Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.1.17
  *   or
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
  *
- o 2022.1.17 Ver0.5
+ o 2022.2.10 Ver0.5
    bug fix mysem_lock,mysem_unlock
  o 2021.4.23 Ver0.4
    bug fix gpio output pin is reset when the command is executed
@@ -103,6 +103,14 @@ int mysem_id = 0;
 key_t key;
 hid_device *hd;
 int8_t is_hid = CP2112_IS_CLOSE;
+union semun
+{
+  int val;
+  struct semid_ds *buf;
+  unsigned short *array;
+  struct seminfo *__buf;
+  void *__pad;
+};
 
 void user_delay_ms(uint32_t period)
 {
@@ -127,14 +135,6 @@ void usage()
 
 int get_myval(int sid)
 {
-  union semun
-  {
-    int val;
-    struct semid_ds *buf;
-    unsigned short *array;
-    struct seminfo *__buf;
-    void *__pad;
-  };
   union semun my_semun;
   uint16_t d_result = semctl(sid, 0, GETVAL, my_semun);
   if (d_result == -1)
@@ -150,14 +150,6 @@ int get_myval(int sid)
 
 int get_sempid(int sid)
 {
-  union semun
-  {
-    int val;
-    struct semid_ds *buf;
-    unsigned short *array;
-    struct seminfo *__buf;
-    void *__pad;
-  };
   union semun my_semun;
   pid_t sem_pid;
   sem_pid = semctl(sid, 0, GETPID, my_semun);
@@ -169,16 +161,8 @@ int get_sempid(int sid)
   return(sem_pid);
 }
 
-void create_semaphore()
+void make_remove_semaphore()
 {
-  union semun
-  {
-    int val;
-    struct semid_ds *buf;
-    unsigned short *array;
-    struct seminfo *__buf;
-    void *__pad;
-  };
   union semun my_semun;
   FILE *fdsem;
   uint16_t d_result;
@@ -394,7 +378,7 @@ void mysem_lock(int sid)
     fdsem = fopen(CP2112_SEMAPHORE,"r");
     if (fdsem == NULL)
     {
-      create_semaphore();
+      make_remove_semaphore();
       config_gpio = 1;
     }
     else
@@ -468,6 +452,8 @@ void mysem_unlock(int sid)
 
 sigtype close_fd()
 {
+  union semun my_semun;
+  int mysemun_id;
   mysem_unlock(mysem_id);
   unlink(SENSOR_DATA);
   unlink(SENSOR_DATA_TMP);
@@ -476,6 +462,13 @@ sigtype close_fd()
     hid_close(hd);
     hid_exit();
   }
+  if (key > 0)
+  {
+    mysemun_id = semget(key, 1, 0666 | IPC_CREAT);
+    my_semun.val = 1;
+    semctl(mysemun_id , 0, IPC_RMID, my_semun);
+  }
+  unlink(CP2112_SEMAPHORE);
   exit(EXIT_SUCCESS);
 }
 
@@ -610,32 +603,25 @@ int am2320_measured(hid_device *hd)
 /* These three steps can be completed by the sensor and writes reads
 https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/cp2112_returns_incor-Dbhn
 */
-  mysem_unlock(mysem_id);
   while (retry_cnt < 5)
   {
-    mysem_lock(mysem_id);
     ret = cp2112_is_idle(hd);
-    mysem_unlock(mysem_id);
  // ret: 0x01 is Busy
     if (ret == 1)
     {
       retry_cnt++;
-      mysem_unlock(mysem_id);
       user_delay_ms(HID_WAIT);
       continue;
     }
 // am2320 wake up
     ret = hid_write(hd, buf_out, 2);
-    mysem_unlock(mysem_id);
 // ret: 0x02 is Complete
     if (ret != 2)
     {
       retry_cnt++;
-      mysem_unlock(mysem_id);
       user_delay_ms(HID_WAIT);
       continue;
     }
-    mysem_unlock(mysem_id);
 /* write a buf_out byte to the am2320 */
     buf_out[0] = CP2112_DATA_WRITE;
     buf_out[2] = 0x03; // writes length
@@ -643,20 +629,16 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
     buf_out[4] = 0x00; // specification 2
     buf_out[5] = 0x04; // specification 3
     user_delay_ms(timeout);
-    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 6);
-    mysem_unlock(mysem_id);
     if (ret != 6)
     {
       retry_cnt++;
       continue;
     }
-    mysem_unlock(mysem_id);
     user_delay_ms (HID_WAIT);
     buf_out[0] = CP2112_DATA_READ_REQ;
     buf_out[2] = 0x00; // reads length_high
     buf_out[3] = 8; // reads length_low
-    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 4);
     if (ret < 0)
     {
@@ -664,12 +646,10 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       hid_error(hd));
      return -1;
     }
-    mysem_unlock(mysem_id);
     user_delay_ms (HID_WAIT);
     buf_out[0] = CP2112_DATA_READ_FORCE_SEND;
     buf_out[2] = 0x00; // reads length_high
     buf_out[3] = 8; // reads length_low
-    mysem_lock(mysem_id);
     ret = hid_send_feature_report(hd, buf_out, 4);
     if (ret < 0)
     {
@@ -677,11 +657,8 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       hid_error(hd));
       return -1;
     }
-    mysem_unlock(mysem_id);
     user_delay_ms(HID_WAIT);
-    mysem_lock(mysem_id);
     ret = hid_read_timeout(hd, buf_in, 11, timeout);
-    mysem_unlock(mysem_id);
 /*
     fprintf(stderr, "\nret: %d retry_cnt: %d\n",ret,retry_cnt);
     fprintf(stderr, "\nbuf_in dump start\n");
@@ -702,9 +679,7 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
       break;
   }
 /* Dummy reading */
-  mysem_lock(mysem_id);
   ret = cp2112_is_idle(hd);
-  mysem_unlock(mysem_id);
   if ( retry_cnt > 4 )
   {
     fprintf(stderr, "-1");
