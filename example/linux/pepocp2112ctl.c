@@ -1,6 +1,6 @@
 /*
 The MIT License
-Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.2.10
+Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.2.16
 */
 
 /*
@@ -15,12 +15,13 @@ Copyright (c) 2020-2027 Isamu.Yamauchi , 2019.5.13 Update 2022.2.10
  * BME680 Drivers from https://github.com/BoschSensortec/BME680_driver
  * Downloads bme680.c bme680.h bme680_defs.h
  * Build with
- *   gcc -Wall -g -o pepocp2112ctl pepocp2112ctl.c bme680.c `pkg-config hidapi-hidraw --libs`
- *   or
+ *   apt install libhidapi-dev
  *   gcc -Wall -o pepocp2112ctl pepocp2112ctl.c bme680.c -lhidapi-hidraw
+ *   or
+ *   gcc -Wall -g -o pepocp2112ctl pepocp2112ctl.c bme680.c `pkg-config hidapi-hidraw --libs`
  *
- o 2022.2.10 Ver0.5
-   bug fix mysem_lock,mysem_unlock
+ o 2022.2.16 Ver0.5
+   bug fix mysem_lock,mysem_unlock,am2320_measured
  o 2021.4.23 Ver0.4
    bug fix gpio output pin is reset when the command is executed
  o 2021.4.11 Ver0.3
@@ -644,7 +645,7 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
     {
       fprintf(stderr, "hid_write() failed: %ls\n" ,
       hid_error(hd));
-     return -1;
+      return -1;
     }
     user_delay_ms (HID_WAIT);
     buf_out[0] = CP2112_DATA_READ_FORCE_SEND;
@@ -677,6 +678,7 @@ https://www.silabs.com/community/interface/knowledge-base.entry.html/2014/10/21/
     }
     if (buf_in[0] == CP2112_DATA_READ_RESPONS && buf_in[1] == 0x02)
       break;
+    retry_cnt++;
   }
 /* Dummy reading */
   ret = cp2112_is_idle(hd);
