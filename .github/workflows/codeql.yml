@@ -11,6 +11,9 @@
 #
 name: "CodeQL"
 
+paths:
+  - example
+
 on:
   push:
     branches: [ "master" ]
@@ -35,8 +38,6 @@ jobs:
         language: [ 'cpp' ]
         # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
         # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
-
-    steps:
     - name: Checkout repository
       uses: actions/checkout@v3
 
